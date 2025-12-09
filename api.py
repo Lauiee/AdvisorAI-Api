@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from sqlalchemy.orm import Session
 import uvicorn
@@ -28,9 +28,11 @@ from datetime import datetime
 # FastAPI 앱 생성
 # -----------------------------
 app = FastAPI(
-    title="AI Adviser API",
-    description="교수님 연구 스타일 및 지도 방식 안내 RAG API",
-    version="1.0.0"
+    title="Advisor AI API",
+    version="1.0.0",
+    contact={
+        "name": "Advisor AI API",
+    },
 )
 
 # CORS 설정 (프론트엔드에서 접근 가능하도록)
@@ -47,10 +49,20 @@ app.add_middleware(
 # 요청/응답 모델
 # -----------------------------
 class ChatRequest(BaseModel):
-    question: str
-    professor_id: Optional[str] = None  # 교수님 ID (prof_001 등) - 지정하면 해당 교수님의 데이터만 검색
-    top_k: Optional[int] = 3  # 검색할 관련 정보 개수
-    session_id: Optional[int] = None  # 채팅 세션 ID (있으면 메시지 저장)
+    question: str = Field(..., description="사용자의 질문", example="교수님은 어떤 연구 방법론을 선호하시나요?")
+    professor_id: Optional[str] = Field(None, description="교수님 ID (예: prof_001). 지정하면 해당 교수님의 데이터만 검색합니다.", example="prof_001")
+    top_k: Optional[int] = Field(3, description="검색할 관련 정보 개수", ge=1, le=10, example=3)
+    session_id: Optional[int] = Field(None, description="채팅 세션 ID. 지정하면 메시지가 데이터베이스에 저장됩니다.", example=1)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "question": "교수님은 어떤 연구 방법론을 선호하시나요?",
+                "professor_id": "prof_001",
+                "top_k": 3,
+                "session_id": 1
+            }
+        }
 
 
 class Reference(BaseModel):
@@ -59,18 +71,39 @@ class Reference(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    answer: str
-    references: List[str]
-    success: bool = True
-    session_id: Optional[int] = None  # 채팅 세션 ID
+    answer: str = Field(..., description="교수님 트윈 AI의 답변", example="저는 개인적으로 정성적 분석과 사례 연구를 선호합니다...")
+    references: List[str] = Field(..., description="답변 생성에 참고한 정보 목록", example=["- 연구 방법론은 어떤 방식을 선호하시나요?", "- 연구 주제는 어떻게 정하나요?"])
+    success: bool = Field(True, description="요청 성공 여부")
+    session_id: Optional[int] = Field(None, description="채팅 세션 ID", example=1)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "answer": "저는 개인적으로 정성적 분석과 사례 연구를 선호합니다. 실제 기업 사례를 통해 이론을 검증하는 방식을 좋아합니다.",
+                "references": [
+                    "- 연구 방법론은 어떤 방식을 선호하시나요?",
+                    "- 연구 주제는 어떻게 정하나요?"
+                ],
+                "success": True,
+                "session_id": 1
+            }
+        }
 
 
 # -----------------------------
 # 채팅 세션 관련 요청/응답 모델
 # -----------------------------
 class ChatSessionRequest(BaseModel):
-    applicant_id: int
-    professor_id: str
+    applicant_id: int = Field(..., description="지원자 ID", example=1)
+    professor_id: str = Field(..., description="교수님 ID (예: prof_001)", example="prof_001")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "applicant_id": 1,
+                "professor_id": "prof_001"
+            }
+        }
 
 
 class ChatMessageResponse(BaseModel):
@@ -140,10 +173,20 @@ class ProfessorsListResponse(BaseModel):
 # 매칭 관련 요청/응답 모델
 # -----------------------------
 class ApplicantRequest(BaseModel):
-    name: Optional[str] = None  # 지원자 이름 (선택사항)
-    major: Optional[str] = None  # 전공 (선택사항)
-    interest_keyword: str  # 관심 키워드: 디지털 전환, 조직 학습, 기술 혁신, 기술 전략, 지속가능경영
-    learning_styles: List[str]  # 학습 성향: 사례 기반, 협업형, 탐구형, 자율형, 피드백 선호, 실증 분석
+    name: Optional[str] = Field(None, description="지원자 이름 (선택사항)", example="홍길동")
+    major: Optional[str] = Field(None, description="전공 (선택사항)", example="경영학과")
+    interest_keyword: str = Field(..., description="관심 키워드 (필수)", example="디지털 전환")
+    learning_styles: List[str] = Field(..., description="학습 성향 (필수, 여러 개 선택 가능)", example=["사례 기반", "협업형"])
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "홍길동",
+                "major": "경영학과",
+                "interest_keyword": "디지털 전환",
+                "learning_styles": ["사례 기반", "협업형", "탐구형"]
+            }
+        }
 
 
 class IndicatorScore(BaseModel):
@@ -242,7 +285,13 @@ async def startup_event():
 # -----------------------------
 # API 엔드포인트
 # -----------------------------
-@app.get("/", response_model=HealthResponse)
+@app.get(
+    "/",
+    response_model=HealthResponse,
+    tags=["Health"],
+    summary="API 상태 확인",
+    description="API 서버의 기본 상태를 확인합니다."
+)
 async def root():
     """API 상태 확인"""
     return {
@@ -251,7 +300,13 @@ async def root():
     }
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    tags=["Health"],
+    summary="헬스 체크",
+    description="API 서버의 헬스 상태를 확인합니다."
+)
 async def health_check():
     """헬스 체크 엔드포인트"""
     return {
@@ -260,7 +315,24 @@ async def health_check():
     }
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+    tags=["Chat"],
+    summary="교수님 트윈 AI와 채팅",
+    description="""
+    교수님 트윈 AI와 실시간으로 대화할 수 있는 엔드포인트입니다.
+    
+    RAG(Retrieval-Augmented Generation) 기반으로 교수님의 실제 답변과 정보를 검색하여
+    교수님의 스타일로 답변을 생성합니다.
+    
+    **주요 기능:**
+    - 교수님의 실제 Q&A 데이터를 기반으로 답변 생성
+    - 교수님의 말투와 스타일로 자연스러운 답변
+    - 관련 정보 자동 검색 및 참조 제공
+    - 채팅 세션 지원 (메시지 저장 가능)
+    """
+)
 async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     """
     사용자 질문에 대한 답변 생성
@@ -340,7 +412,13 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 # -----------------------------
 # 대학원/교수님 관련 API
 # -----------------------------
-@app.get("/graduate-schools", response_model=List[GraduateSchoolResponse])
+@app.get(
+    "/graduate-schools",
+    response_model=List[GraduateSchoolResponse],
+    tags=["Graduate Schools & Professors"],
+    summary="대학원 목록 조회",
+    description="등록된 모든 대학원의 목록을 조회합니다."
+)
 async def get_graduate_schools(db: Session = Depends(get_db)):
     """모든 대학원 목록 조회"""
     try:
@@ -353,7 +431,13 @@ async def get_graduate_schools(db: Session = Depends(get_db)):
         )
 
 
-@app.get("/graduate-schools/{school_id}/professors", response_model=ProfessorsListResponse)
+@app.get(
+    "/graduate-schools/{school_id}/professors",
+    response_model=ProfessorsListResponse,
+    tags=["Graduate Schools & Professors"],
+    summary="대학원별 교수님 목록 조회",
+    description="특정 대학원에 소속된 교수님들의 목록과 기본 정보를 조회합니다."
+)
 async def get_professors_by_school(school_id: int, db: Session = Depends(get_db)):
     """
     특정 대학원의 교수님 목록과 기본 정보 조회
@@ -392,7 +476,13 @@ async def get_professors_by_school(school_id: int, db: Session = Depends(get_db)
 # -----------------------------
 # 채팅 세션 관련 API
 # -----------------------------
-@app.post("/chat/session", response_model=ChatSessionResponse)
+@app.post(
+    "/chat/session",
+    response_model=ChatSessionResponse,
+    tags=["Chat"],
+    summary="채팅 세션 생성",
+    description="지원자와 교수님 간의 새로운 채팅 세션을 생성하거나 기존 세션을 조회합니다."
+)
 async def create_chat_session(
     request: ChatSessionRequest,
     db: Session = Depends(get_db)
@@ -485,7 +575,13 @@ async def create_chat_session(
         )
 
 
-@app.get("/chat/session/{session_id}", response_model=ChatSessionResponse)
+@app.get(
+    "/chat/session/{session_id}",
+    response_model=ChatSessionResponse,
+    tags=["Chat"],
+    summary="채팅 세션 조회",
+    description="특정 채팅 세션의 정보와 메시지 내역을 조회합니다."
+)
 async def get_chat_session(session_id: int, db: Session = Depends(get_db)):
     """채팅 세션 조회"""
     try:
@@ -531,7 +627,13 @@ async def get_chat_session(session_id: int, db: Session = Depends(get_db)):
         )
 
 
-@app.get("/chat/sessions/applicant/{applicant_id}", response_model=List[ChatSessionResponse])
+@app.get(
+    "/chat/sessions/applicant/{applicant_id}",
+    response_model=List[ChatSessionResponse],
+    tags=["Chat"],
+    summary="지원자 채팅 세션 목록 조회",
+    description="특정 지원자의 모든 채팅 세션 목록을 조회합니다."
+)
 async def get_applicant_sessions(applicant_id: int, db: Session = Depends(get_db)):
     """지원자의 모든 채팅 세션 조회"""
     try:
@@ -579,7 +681,13 @@ async def get_applicant_sessions(applicant_id: int, db: Session = Depends(get_db
 # -----------------------------
 # 지원자 정보 관련 API
 # -----------------------------
-@app.get("/applicants/{applicant_id}", response_model=ApplicantResponse)
+@app.get(
+    "/applicants/{applicant_id}",
+    response_model=ApplicantResponse,
+    tags=["Applicants"],
+    summary="지원자 정보 조회",
+    description="특정 지원자의 정보를 조회합니다."
+)
 async def get_applicant(applicant_id: int, db: Session = Depends(get_db)):
     """지원자 정보 조회"""
     try:
@@ -606,7 +714,13 @@ class ApplicantUpdateRequest(BaseModel):
     learning_styles: Optional[List[str]] = None
 
 
-@app.put("/applicants/{applicant_id}", response_model=ApplicantResponse)
+@app.put(
+    "/applicants/{applicant_id}",
+    response_model=ApplicantResponse,
+    tags=["Applicants"],
+    summary="지원자 정보 수정",
+    description="지원자의 정보를 수정합니다."
+)
 async def update_applicant(
     applicant_id: int,
     request: ApplicantUpdateRequest,
@@ -667,7 +781,33 @@ async def update_applicant(
 # -----------------------------
 # 매칭 관련 API
 # -----------------------------
-@app.post("/match", response_model=MatchingResponse)
+@app.post(
+    "/match",
+    response_model=MatchingResponse,
+    tags=["Matching"],
+    summary="지원자-교수님 매칭 적합도 측정",
+    description="""
+    지원자와 교수님 간의 적합도를 5가지 지표(Indicator)를 기반으로 측정합니다.
+    
+    **측정 지표:**
+    - A. 연구 키워드 (Research Keyword)
+    - B. 연구 방법론 (Research Methodology)
+    - C. 커뮤니케이션 (Communication)
+    - D. 학문 접근도 (Academic Approach)
+    - E. 교수 선호도 (Preferred Student Type)
+    
+    **입력값:**
+    - **interest_keyword**: 관심 키워드 (필수)
+      - 디지털 전환, 조직 학습, 기술 혁신, 기술 전략, 지속가능경영
+    - **learning_styles**: 학습 성향 (필수, 여러 개 선택 가능)
+      - 사례 기반, 협업형, 탐구형, 자율형, 피드백 선호, 실증 분석
+    
+    **응답:**
+    - 각 교수님별로 5가지 지표의 점수와 최종 적합도 점수 제공
+    - 매칭 근거 설명 포함
+    - 지원자 정보는 자동으로 데이터베이스에 저장됨
+    """
+)
 async def match_applicant(
     request: ApplicantRequest,
     professor_ids: Optional[List[str]] = None,
@@ -793,7 +933,25 @@ async def match_applicant(
         )
 
 
-@app.post("/match/final", response_model=FinalReportResponse)
+@app.post(
+    "/match/final",
+    response_model=FinalReportResponse,
+    tags=["Matching"],
+    summary="최종 적합도 리포트 생성",
+    description="""
+    채팅 내역을 포함한 최종 적합도 리포트를 생성합니다.
+    
+    **포함 내용:**
+    - 1차 적합도 점수 (키워드 및 학습 성향 기반)
+    - 채팅 기반 점수 (대화 내용 분석)
+    - 최종 적합도 점수 (가중 평균)
+    - 상세 리포트 및 분석 내용
+    
+    **사용 시점:**
+    - 지원자가 교수님과 채팅을 완료한 후
+    - 최종 매칭 결과를 확인하고 싶을 때
+    """
+)
 async def generate_final_matching_report(
     session_id: int,
     db: Session = Depends(get_db)
@@ -917,7 +1075,13 @@ async def generate_final_matching_report(
         )
 
 
-@app.post("/email/draft", response_model=EmailDraftResponse)
+@app.post(
+    "/email/draft",
+    response_model=EmailDraftResponse,
+    tags=["Email"],
+    summary="상담 요청 이메일 초안 생성",
+    description="교수님께 보낼 상담 요청 이메일의 초안을 자동으로 생성합니다."
+)
 async def create_email_draft(
     request: EmailDraftRequest,
     db: Session = Depends(get_db)
@@ -1043,7 +1207,13 @@ async def create_email_draft(
         )
 
 
-@app.post("/email/send", response_model=EmailSendResponse)
+@app.post(
+    "/email/send",
+    response_model=EmailSendResponse,
+    tags=["Email"],
+    summary="상담 요청 이메일 전송",
+    description="생성된 이메일 초안을 교수님께 실제로 전송합니다."
+)
 async def send_consultation_email(
     request: EmailSendRequest,
     db: Session = Depends(get_db)
