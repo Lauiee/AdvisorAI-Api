@@ -5,4 +5,5 @@ pinecone-client
 sqlalchemy
 pydantic
 python-dotenv
+gunicorn
 

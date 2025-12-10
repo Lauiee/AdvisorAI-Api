@@ -237,8 +237,7 @@ class FinalReportResponse(BaseModel):
     initial_score: int  # 1차 적합도
     chat_score: int  # 채팅 기반 점수
     final_score: int  # 최종 적합도
-    report: str  # 리포트 내용
-    chat_analysis: Optional[str] = None  # 채팅 분석
+    report: str  # 리포트 내용 (채팅 분석 포함)
     success: bool = True
 
 
@@ -1062,7 +1061,6 @@ async def generate_final_matching_report(
             chat_score=chat_based["chat_score"],
             final_score=final_score_data["final_score"],
             report=report,
-            chat_analysis=chat_based.get("analysis", ""),
             success=True
         )
         
