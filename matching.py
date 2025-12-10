@@ -6,6 +6,7 @@ import re
 from typing import List, Dict, Optional
 from openai import OpenAI
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import SessionLocal, Professor
 from dotenv import load_dotenv
 
@@ -83,7 +84,8 @@ def get_professor_qa_by_indicator(professor_id: str, indicator: str) -> List[Dic
 def calculate_indicator_score(
     applicant_data: Dict,
     professor_id: str,
-    indicator: str
+    indicator: str,
+    learning_style_embeddings: Optional[Dict[str, List[float]]] = None
 ) -> Dict:
     """
     특정 indicator에 대한 매칭 점수 계산
@@ -150,13 +152,31 @@ def calculate_indicator_score(
                 "qa_count": len(qa_list)
             }
         
-        # 모든 학습 성향과 모든 답변을 한 번에 임베딩
-        answer_texts = [qa["answer"] for qa in qa_list]
-        all_texts = learning_styles + answer_texts
-        embeddings = embed_texts(all_texts)
+        # 학습 성향 임베딩 재사용 (캐싱)
+        if learning_style_embeddings is None:
+            learning_style_embeddings = {}
         
-        style_embeddings = embeddings[:len(learning_styles)]
-        answer_embeddings = embeddings[len(learning_styles):]
+        # 캐시에 없는 학습 성향만 임베딩
+        style_embeddings = []
+        styles_to_embed = []
+        for style in learning_styles:
+            if style in learning_style_embeddings:
+                style_embeddings.append(learning_style_embeddings[style])
+            else:
+                styles_to_embed.append(style)
+        
+        # 새로 임베딩이 필요한 학습 성향 처리
+        if styles_to_embed:
+            new_embeddings = embed_texts(styles_to_embed)
+            for i, style in enumerate(styles_to_embed):
+                learning_style_embeddings[style] = new_embeddings[i]
+        
+        # 학습 성향 순서대로 임베딩 재구성
+        style_embeddings = [learning_style_embeddings[style] for style in learning_styles]
+        
+        # 답변만 임베딩 (학습 성향은 이미 임베딩됨)
+        answer_texts = [qa["answer"] for qa in qa_list]
+        answer_embeddings = embed_texts(answer_texts)
         
         # 각 Q&A에 대해 가장 높은 유사도 찾기
         for i, qa in enumerate(qa_list):
@@ -237,7 +257,8 @@ def calculate_indicator_score(
 # -----------------------------
 def calculate_matching_score(
     applicant_data: Dict,
-    professor_id: str
+    professor_id: str,
+    learning_style_embeddings: Optional[Dict[str, List[float]]] = None
 ) -> Dict:
     """
     지원자와 교수님 간의 전체 매칭 점수 계산
@@ -278,7 +299,12 @@ def calculate_matching_score(
     total_weight = 0
     
     for indicator in indicators:
-        score_data = calculate_indicator_score(applicant_data, professor_id, indicator)
+        score_data = calculate_indicator_score(
+            applicant_data, 
+            professor_id, 
+            indicator,
+            learning_style_embeddings
+        )
         indicator_scores.append(score_data)
         total_score += score_data["score"]
         
@@ -345,6 +371,7 @@ def match_all_professors(
 ) -> List[Dict]:
     """
     지원자와 모든 교수님(또는 지정된 교수님들)과의 매칭 점수 계산
+    병렬 처리로 속도 개선
     
     Args:
         applicant_data: 지원자 데이터
@@ -359,10 +386,42 @@ def match_all_professors(
             data = json.load(f)
         professor_ids = list(set([item["professor_id"] for item in data]))
     
+    # 학습 성향 임베딩을 미리 생성하여 재사용 (모든 교수님과 indicator에서 공통 사용)
+    learning_styles = applicant_data.get("learning_styles", [])
+    if isinstance(learning_styles, str):
+        learning_styles = [s.strip() for s in learning_styles.split(",")]
+    
+    learning_style_embeddings = {}
+    if learning_styles:
+        # 학습 성향을 한 번만 임베딩하여 재사용
+        style_embeddings = embed_texts(learning_styles)
+        for i, style in enumerate(learning_styles):
+            learning_style_embeddings[style] = style_embeddings[i]
+    
+    # 병렬 처리로 여러 교수님의 매칭을 동시에 계산
     results = []
-    for prof_id in professor_ids:
-        matching_result = calculate_matching_score(applicant_data, prof_id)
-        results.append(matching_result)
+    with ThreadPoolExecutor(max_workers=min(len(professor_ids), 5)) as executor:
+        # 각 교수님에 대해 매칭 점수 계산 작업 제출 (학습 성향 임베딩 전달)
+        future_to_prof = {
+            executor.submit(calculate_matching_score, applicant_data, prof_id, learning_style_embeddings): prof_id
+            for prof_id in professor_ids
+        }
+        
+        # 완료된 작업부터 결과 수집
+        for future in as_completed(future_to_prof):
+            try:
+                matching_result = future.result()
+                results.append(matching_result)
+            except Exception as e:
+                prof_id = future_to_prof[future]
+                print(f"교수님 {prof_id} 매칭 계산 중 오류: {e}")
+                # 오류 발생 시 기본 점수로 처리
+                results.append({
+                    "professor_id": prof_id,
+                    "total_score": 70,
+                    "indicator_scores": [],
+                    "breakdown": {"A": 70, "B": 70, "C": 70, "D": 70, "E": 70}
+                })
     
     # 점수 높은 순으로 정렬
     results.sort(key=lambda x: x["total_score"], reverse=True)

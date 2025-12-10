@@ -873,28 +873,13 @@ async def match_applicant(
         # 매칭 점수 계산
         matching_results = match_all_professors(applicant_data, professor_ids)
         
-        # 교수님 이름 추가 및 매칭 근거 생성
-        applicant_name = request.name if request.name else "지원자"
+        # 교수님 이름 추가 (매칭 근거는 별도 API로 분리)
         for result in matching_results:
             professor = db.query(Professor).filter(
                 Professor.professor_id == result["professor_id"]
             ).first()
             if professor:
                 result["professor_name"] = professor.name
-            
-            # 매칭 근거 생성
-            try:
-                rationale = generate_matching_rationale(
-                    applicant_name=applicant_name,
-                    applicant_data=applicant_data,
-                    professor_id=result["professor_id"],
-                    professor_name=result.get("professor_name", "교수님"),
-                    matching_result=result
-                )
-                result["rationale"] = rationale
-            except Exception as e:
-                # 근거 생성 실패 시 기본 메시지
-                result["rationale"] = f"{applicant_name} 학생과 {result.get('professor_name', '교수님')} 교수의 매칭 적합도는 {result['total_score']}점입니다."
         
         # 응답 형식 변환
         formatted_results = []
@@ -913,7 +898,7 @@ async def match_applicant(
                     for ind in result["indicator_scores"]
                 ],
                 breakdown=result["breakdown"],
-                rationale=result.get("rationale")
+                rationale=None  # 초기 매칭에서는 근거 생성하지 않음 (별도 API 사용)
             ))
         
         return MatchingResponse(
@@ -929,6 +914,101 @@ async def match_applicant(
         raise HTTPException(
             status_code=500,
             detail=f"매칭 점수 계산 중 오류가 발생했습니다: {str(e)}"
+        )
+
+
+# -----------------------------
+# 매칭 근거 생성 API (별도 엔드포인트)
+# -----------------------------
+class RationaleRequest(BaseModel):
+    applicant_id: int
+    professor_id: str
+
+
+class RationaleResponse(BaseModel):
+    rationale: str
+    success: bool = True
+
+
+@app.post(
+    "/match/rationale",
+    response_model=RationaleResponse,
+    tags=["Matching"],
+    summary="매칭 근거 생성",
+    description="""
+    특정 교수님과의 매칭 근거를 생성합니다.
+    
+    **사용 시점:**
+    - 초기 매칭 후 교수님을 선택했을 때
+    - 상세한 매칭 근거가 필요할 때
+    
+    **주의:**
+    - 초기 매칭(`/match`)에서는 근거가 포함되지 않습니다
+    - 이 API를 호출하여 근거를 생성하세요
+    """
+)
+async def get_matching_rationale(
+    request: RationaleRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    매칭 근거 생성
+    
+    - **applicant_id**: 지원자 ID
+    - **professor_id**: 교수님 ID
+    
+    Returns:
+        매칭 근거 설명
+    """
+    try:
+        # 지원자 정보 조회
+        applicant = db.query(Applicant).filter(Applicant.id == request.applicant_id).first()
+        if not applicant:
+            raise HTTPException(
+                status_code=404,
+                detail=f"지원자 ID {request.applicant_id}를 찾을 수 없습니다."
+            )
+        
+        # 교수님 정보 조회
+        professor = db.query(Professor).filter(
+            Professor.professor_id == request.professor_id
+        ).first()
+        if not professor:
+            raise HTTPException(
+                status_code=404,
+                detail=f"교수님 ID {request.professor_id}를 찾을 수 없습니다."
+            )
+        
+        # 지원자 데이터 준비
+        applicant_data = {
+            "interest_keyword": applicant.interest_keyword,
+            "learning_styles": [s.strip() for s in applicant.learning_styles.split(",")]
+        }
+        
+        # 매칭 점수 계산
+        matching_result = calculate_matching_score(applicant_data, request.professor_id)
+        
+        # 매칭 근거 생성
+        applicant_name = applicant.name if applicant.name else "지원자"
+        rationale = generate_matching_rationale(
+            applicant_name=applicant_name,
+            applicant_data=applicant_data,
+            professor_id=request.professor_id,
+            professor_name=professor.name,
+            matching_result=matching_result
+        )
+        
+        return RationaleResponse(
+            rationale=rationale,
+            success=True
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"매칭 근거 생성 중 오류가 발생했습니다: {str(e)}"
         )
 
 
