@@ -1,9 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from sqlalchemy.orm import Session
 import uvicorn
+import json
 
 # chat.py에서 함수들 import
 from chat import generate_answer
@@ -932,11 +934,10 @@ class RationaleResponse(BaseModel):
 
 @app.post(
     "/match/rationale",
-    response_model=RationaleResponse,
     tags=["Matching"],
-    summary="매칭 근거 생성",
+    summary="매칭 근거 생성 (SSE 스트리밍)",
     description="""
-    특정 교수님과의 매칭 근거를 생성합니다.
+    특정 교수님과의 매칭 근거를 SSE(Server-Sent Events)로 스트리밍하여 생성합니다.
     
     **사용 시점:**
     - 초기 매칭 후 교수님을 선택했을 때
@@ -944,21 +945,29 @@ class RationaleResponse(BaseModel):
     
     **주의:**
     - 초기 매칭(`/match`)에서는 근거가 포함되지 않습니다
-    - 이 API를 호출하여 근거를 생성하세요
+    - 이 API를 호출하여 근거를 스트리밍으로 받으세요
+    - SSE 형식으로 실시간 스트리밍됩니다
+    
+    **응답 형식 (SSE):**
+    ```
+    data: {"content": "텍스트 청크", "done": false}
+    data: {"content": "텍스트 청크", "done": false}
+    data: {"content": "", "done": true}
+    ```
     """
 )
-async def get_matching_rationale(
+async def get_matching_rationale_stream(
     request: RationaleRequest,
     db: Session = Depends(get_db)
 ):
     """
-    매칭 근거 생성
+    매칭 근거 생성 (SSE 스트리밍)
     
     - **applicant_id**: 지원자 ID
     - **professor_id**: 교수님 ID
     
     Returns:
-        매칭 근거 설명
+        SSE 스트리밍 응답
     """
     try:
         # 지원자 정보 조회
@@ -988,19 +997,38 @@ async def get_matching_rationale(
         # 매칭 점수 계산
         matching_result = calculate_matching_score(applicant_data, request.professor_id)
         
-        # 매칭 근거 생성
+        # 매칭 근거 스트리밍 생성
         applicant_name = applicant.name if applicant.name else "지원자"
-        rationale = generate_matching_rationale(
-            applicant_name=applicant_name,
-            applicant_data=applicant_data,
-            professor_id=request.professor_id,
-            professor_name=professor.name,
-            matching_result=matching_result
-        )
         
-        return RationaleResponse(
-            rationale=rationale,
-            success=True
+        from matching import generate_matching_rationale_stream
+        
+        def generate_stream():
+            try:
+                for chunk in generate_matching_rationale_stream(
+                    applicant_name=applicant_name,
+                    applicant_data=applicant_data,
+                    professor_id=request.professor_id,
+                    professor_name=professor.name,
+                    matching_result=matching_result
+                ):
+                    yield chunk
+            except Exception as e:
+                # 오류 발생 시 오류 메시지 전송
+                error_msg = json.dumps({
+                    "content": f"오류가 발생했습니다: {str(e)}",
+                    "done": True,
+                    "error": True
+                }, ensure_ascii=False)
+                yield f"data: {error_msg}\n\n"
+        
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
         )
         
     except HTTPException:

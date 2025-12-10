@@ -3,7 +3,7 @@
 """
 import json
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Generator
 from openai import OpenAI
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -552,6 +552,137 @@ def generate_matching_rationale(
     except Exception as e:
         # 오류 발생 시 기본 템플릿 반환
         return f"{applicant_name} 학생과 {professor_name} 교수의 매칭은 관심 키워드({applicant_data.get('interest_keyword', '')})와 연구 분야({professor_research_fields})의 일치, 그리고 학습 성향({learning_styles_text})과 교수님의 지도 스타일 간의 시너지를 보입니다. 전체 적합도는 {matching_result['total_score']}점으로, 특히 {highest_name_short} 영역에서 {highest_score}점의 높은 적합도를 보입니다."
+
+
+def generate_matching_rationale_stream(
+    applicant_name: str,
+    applicant_data: Dict,
+    professor_id: str,
+    professor_name: str,
+    matching_result: Dict
+) -> Generator[str, None, None]:
+    """
+    지원자와 교수님 간의 매칭 근거를 스트리밍으로 생성 (SSE용)
+    
+    Args:
+        applicant_name: 지원자 이름
+        applicant_data: 지원자 데이터
+        professor_id: 교수님 ID
+        professor_name: 교수님 이름
+        matching_result: 매칭 결과
+    
+    Yields:
+        매칭 근거 텍스트 청크
+    """
+    # 교수님 정보 조회
+    db = SessionLocal()
+    try:
+        professor = db.query(Professor).filter(Professor.professor_id == professor_id).first()
+        professor_research_fields = professor.research_fields if professor else ""
+    except Exception:
+        professor_research_fields = ""
+    finally:
+        db.close()
+    
+    # Indicator별 점수 정보 구성
+    indicator_info = []
+    for ind_score in matching_result["indicator_scores"]:
+        indicator_name = ind_score["indicator"]
+        score = ind_score["score"]
+        if "연구 키워드" in indicator_name:
+            indicator_info.append(f"연구 키워드 {score}점")
+        elif "연구 방법론" in indicator_name:
+            indicator_info.append(f"연구 방법론 {score}점")
+        elif "커뮤니케이션" in indicator_name:
+            indicator_info.append(f"커뮤니케이션 {score}점")
+        elif "학문 접근도" in indicator_name:
+            indicator_info.append(f"학문 접근도 {score}점")
+        elif "교수 선호도" in indicator_name:
+            indicator_info.append(f"교수 선호도 {score}점")
+    
+    # 가장 높은 점수의 indicator 찾기
+    highest_indicator = max(matching_result["indicator_scores"], key=lambda x: x["score"])
+    highest_score = highest_indicator["score"]
+    highest_name = highest_indicator["indicator"]
+    if "연구 키워드" in highest_name:
+        highest_name_short = "연구 키워드"
+    elif "연구 방법론" in highest_name:
+        highest_name_short = "연구 방법론"
+    elif "커뮤니케이션" in highest_name:
+        highest_name_short = "커뮤니케이션"
+    elif "학문 접근도" in highest_name:
+        highest_name_short = "학문 접근도"
+    elif "교수 선호도" in highest_name:
+        highest_name_short = "교수 선호도"
+    else:
+        highest_name_short = highest_name
+    
+    # 학습 성향 텍스트
+    learning_styles_text = ", ".join(applicant_data.get("learning_styles", []))
+    
+    # 프롬프트 구성
+    prompt = f"""다음 정보를 바탕으로 지원자와 교수님의 매칭 근거를 작성해주세요.
+
+지원자 정보:
+- 이름: {applicant_name}
+- 관심 키워드: {applicant_data.get('interest_keyword', '')}
+- 학습 성향: {learning_styles_text}
+
+교수님 정보:
+- 이름: {professor_name} 교수
+- 연구 분야: {professor_research_fields}
+
+매칭 점수:
+- 전체 적합도: {matching_result['total_score']}점
+- 연구 키워드: {matching_result['breakdown']['A']}점
+- 연구 방법론: {matching_result['breakdown']['B']}점
+- 커뮤니케이션: {matching_result['breakdown']['C']}점
+- 학문 접근도: {matching_result['breakdown']['D']}점
+- 교수 선호도: {matching_result['breakdown']['E']}점
+
+요구사항:
+1. "{applicant_name} 학생과 {professor_name} 교수의 매칭은..."으로 시작
+2. 관심 키워드와 연구 분야의 일치도를 강조
+3. 학습 성향과 교수님의 스타일 간의 시너지 설명
+4. 가장 높은 점수의 indicator({highest_name_short} {highest_score}점)를 언급
+5. 구체적인 연구 방향성과 협업 가능성 제시
+6. 자연스럽고 전문적인 문체로 작성
+7. 3-4문장으로 간결하게 작성
+
+매칭 근거:"""
+    
+    try:
+        # 스트리밍 응답 생성
+        stream = client.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "당신은 대학원 진학 상담 전문가입니다. 지원자와 교수님 간의 매칭 근거를 객관적이고 전문적으로 작성합니다."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=500,
+            stream=True  # 스트리밍 활성화
+        )
+        
+        # 스트리밍 응답을 SSE 형식으로 변환
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                content = chunk.choices[0].delta.content
+                yield f"data: {json.dumps({'content': content, 'done': False}, ensure_ascii=False)}\n\n"
+        
+        # 완료 신호
+        yield f"data: {json.dumps({'content': '', 'done': True}, ensure_ascii=False)}\n\n"
+        
+    except Exception as e:
+        # 오류 발생 시 기본 템플릿 반환
+        default_text = f"{applicant_name} 학생과 {professor_name} 교수의 매칭은 관심 키워드({applicant_data.get('interest_keyword', '')})와 연구 분야({professor_research_fields})의 일치, 그리고 학습 성향({learning_styles_text})과 교수님의 지도 스타일 간의 시너지를 보입니다. 전체 적합도는 {matching_result['total_score']}점으로, 특히 {highest_name_short} 영역에서 {highest_score}점의 높은 적합도를 보입니다."
+        yield f"data: {json.dumps({'content': default_text, 'done': True}, ensure_ascii=False)}\n\n"
 
 
 # -----------------------------
