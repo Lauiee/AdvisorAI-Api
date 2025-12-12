@@ -1006,30 +1006,44 @@ def generate_final_report_stream(
     Yields:
         리포트 텍스트 청크 (SSE 형식)
     """
-    # 리포트 생성 프롬프트 (간소화)
-    report_prompt = f"""최종 매칭 리포트 작성:
+    # 리포트 생성 프롬프트 (원래 템플릿)
+    report_prompt = f"""다음 정보를 바탕으로 지원자와 교수님의 최종 매칭 리포트를 작성해주세요.
 
-지원자: {applicant_name}
-관심: {applicant_data.get('interest_keyword', '')}
-학습 성향: {', '.join(applicant_data.get('learning_styles', []))}
-교수: {professor_name}
+지원자 정보:
+- 이름: {applicant_name}
+- 관심 키워드: {applicant_data.get('interest_keyword', '')}
+- 학습 성향: {', '.join(applicant_data.get('learning_styles', []))}
 
-1차 적합도: {initial_matching['total_score']}점
+교수님 정보:
+- 이름: {professor_name} 교수
+
+1차 적합도 분석:
+- 전체 적합도: {initial_matching['total_score']}점
 - 연구 키워드: {initial_matching['breakdown']['A']}점
 - 연구 방법론: {initial_matching['breakdown']['B']}점
 - 커뮤니케이션: {initial_matching['breakdown']['C']}점
 - 학문 접근도: {initial_matching['breakdown']['D']}점
 - 교수 선호도: {initial_matching['breakdown']['E']}점
 
-채팅 분석: {chat_based_score.get('chat_score', 0)}점
-{chat_based_score.get('analysis', '채팅 내역 없음')}
+채팅 기반 분석:
+- 채팅 적합도: {chat_based_score.get('chat_score', 0)}점
+- 채팅 분석 내용: {chat_based_score.get('analysis', '채팅 내역이 없습니다.')}
 
 최종 적합도: {final_score['final_score']}점
 
-요구: 리포트 형식(제목, 요약, 상세 분석, 결론), 1차+채팅 종합 평가, 채팅 분석 포함, 강점/개선점, 추천 사항, 전문적 문체, 500-800자, 문단 사이 줄바꿈 필수.
-중요: 리포트는 반드시 "# 최종 매칭 리포트"로 시작해야 합니다. 다른 제목이나 형식을 사용하지 마세요.
+대화 요약:
+{chr(10).join([f"{msg['role']}: {msg['content'][:100]}..." for msg in chat_messages[-5:]]) if chat_messages else "채팅 내역이 없습니다."}
 
-리포트를 작성하세요. 반드시 "# 최종 매칭 리포트"로 시작하세요:
+요구사항:
+1. 리포트 형식으로 작성 (제목, 요약, 상세 분석, 결론)
+2. 1차 적합도와 채팅 기반 분석을 종합하여 평가
+3. 채팅 분석 내용을 반드시 리포트에 포함시켜야 합니다
+4. 구체적인 강점과 개선점 제시
+5. 최종 추천 사항 포함
+6. 전문적이고 객관적인 문체
+7. 500-800자 정도의 분량
+8. 각 문단 사이에는 반드시 줄바꿈(빈 줄)을 넣어주세요
+9. 중요: 리포트는 반드시 "# 최종 매칭 리포트"로 시작해야 합니다
 
 리포트:"""
     
