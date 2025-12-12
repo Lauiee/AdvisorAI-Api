@@ -1242,7 +1242,7 @@ async def create_email_draft(
                 detail=f"대학원 정보를 찾을 수 없습니다."
             )
         
-        # 최종 적합도 점수 조회 (session_id가 제공된 경우)
+        # 최종 적합도 점수 조회 (session_id가 제공된 경우, 빠른 처리)
         final_score = None
         if request.session_id:
             try:
@@ -1254,41 +1254,12 @@ async def create_email_draft(
                         "learning_styles": [s.strip() for s in applicant.learning_styles.split(",")]
                     }
                     
-                    # 1차 적합도 계산
+                    # 빠른 처리: 1차 적합도만 계산 (채팅 기반 점수는 생략하여 속도 개선)
                     initial_matching = calculate_matching_score(applicant_data, request.professor_id)
+                    final_score = initial_matching["total_score"]
                     
-                    # 채팅 메시지 조회
-                    messages = db.query(ChatMessage).filter(
-                        ChatMessage.session_id == request.session_id
-                    ).order_by(ChatMessage.timestamp).all()
-                    
-                    if messages:
-                        # 채팅 메시지를 딕셔너리 형식으로 변환
-                        chat_messages = [
-                            {"role": msg.role, "content": msg.content}
-                            for msg in messages
-                        ]
-                        
-                        # 채팅 기반 점수 계산
-                        chat_based = calculate_chat_based_score(
-                            chat_messages=chat_messages,
-                            applicant_data=applicant_data,
-                            professor_id=request.professor_id
-                        )
-                        
-                        # 최종 점수 계산
-                        if chat_based["chat_score"] == 0:
-                            final_score = initial_matching["total_score"]
-                        else:
-                            final_score_data = calculate_final_matching_score(
-                                initial_score=initial_matching["total_score"],
-                                chat_score=chat_based["chat_score"],
-                                chat_analysis=chat_based.get("analysis", "")
-                            )
-                            final_score = final_score_data["final_score"]
-                    else:
-                        # 채팅이 없으면 1차 적합도만 사용
-                        final_score = initial_matching["total_score"]
+                    # 채팅 메시지가 있으면 간단히 확인만 (점수 계산 생략)
+                    # 채팅 기반 점수 계산은 시간이 오래 걸리므로 생략
             except Exception as e:
                 # 세션 조회 실패해도 이메일 초안은 생성 가능
                 pass

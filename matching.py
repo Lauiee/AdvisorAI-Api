@@ -1183,27 +1183,19 @@ def generate_email_draft_stream(
     # 이메일 초안 생성 프롬프트 (간소화)
     score_text = f"{final_score}%의 높은 적합도" if final_score else "높은 적합도"
     
-    email_prompt = f"""교수님께 보내는 상담 요청 이메일을 작성하세요.
+    # 프롬프트 간소화 (첫 토큰까지 시간 단축)
+    email_prompt = f"""상담 요청 이메일 작성:
 
-정보:
-- 지원자: {applicant_name} ({applicant_major or "전공 미입력"})
-- 관심 키워드: {applicant_interest_keyword}
-- 대학원: {graduate_school_name}
-- 교수님: {professor_name} 교수님 (연구 분야: {professor_research_fields or "미입력"})
-- 적합도: {score_text if final_score else "높음"}
-- 상담 희망: {appointment_date} {appointment_time}, {consultation_text}
+지원자: {applicant_name} ({applicant_major or "전공 미입력"})
+관심: {applicant_interest_keyword}
+대학원: {graduate_school_name}
+교수: {professor_name} ({professor_research_fields or "미입력"})
+적합도: {score_text if final_score else "높음"}
+상담: {appointment_date} {appointment_time}, {consultation_text}
 
-요구사항:
-- 정중하고 격식 있는 문체
-- 이메일 형식 (인사말, 본문, 마무리, 서명)
-- 적합도 언급, 관심 키워드와 연구 분야 일치도 강조
-- 상담 요청 이유 명확히, 날짜/시간 제안 (유연성 표현)
-- 리포트 첨부 언급
-- 마크다운 사용 금지, 순수 텍스트만
-- 간결하게
-- 중요: 각 문단 사이에는 반드시 줄바꿈(빈 줄)을 넣어주세요. 이메일 형식에 맞게 구조화된 형태로 작성하세요.
+요구: 정중한 문체, 이메일 형식, 적합도/관심 키워드 강조, 상담 이유, 날짜 제안(유연성), 리포트 첨부, 마크다운 금지, 문단 사이 줄바꿈 필수.
 
-이메일 초안:"""
+이메일:"""
     
     try:
         # 스트리밍 응답 생성
@@ -1219,8 +1211,8 @@ def generate_email_draft_stream(
                     "content": email_prompt
                 }
             ],
-            temperature=0.3,
-            max_tokens=1000,
+            temperature=0.2,  # 더 빠른 응답
+            max_tokens=800,  # 더 짧게
             stream=True  # 스트리밍 활성화
         )
         
