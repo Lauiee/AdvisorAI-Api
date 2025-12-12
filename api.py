@@ -1042,11 +1042,10 @@ async def get_matching_rationale_stream(
 
 @app.post(
     "/match/final",
-    response_model=FinalReportResponse,
     tags=["Matching"],
-    summary="최종 적합도 리포트 생성",
+    summary="최종 적합도 리포트 생성 (SSE 스트리밍)",
     description="""
-    채팅 내역을 포함한 최종 적합도 리포트를 생성합니다.
+    채팅 내역을 포함한 최종 적합도 리포트를 SSE(Server-Sent Events)로 스트리밍하여 생성합니다.
     
     **포함 내용:**
     - 1차 적합도 점수 (키워드 및 학습 성향 기반)
@@ -1057,6 +1056,13 @@ async def get_matching_rationale_stream(
     **사용 시점:**
     - 지원자가 교수님과 채팅을 완료한 후
     - 최종 매칭 결과를 확인하고 싶을 때
+    
+    **응답 형식 (SSE):**
+    ```
+    data: {"content": "텍스트 청크", "done": false}
+    data: {"content": "텍스트 청크", "done": false}
+    data: {"content": "", "done": true}
+    ```
     """
 )
 async def generate_final_matching_report(
@@ -1148,28 +1154,39 @@ async def generate_final_matching_report(
             "chat_analysis": chat_based.get("analysis", "채팅 내역이 없습니다.")
         }
         
-        # 최종 리포트 생성
-        report = generate_final_report(
-            applicant_name=applicant.name or "지원자",
-            applicant_data=applicant_data,
-            professor_id=session.professor_id,
-            professor_name=professor.name,
-            initial_matching=initial_matching,
-            chat_based_score=chat_based,
-            final_score=final_score_data,
-            chat_messages=chat_messages
-        )
+        # 최종 리포트 스트리밍 생성
+        from matching import generate_final_report_stream
         
-        return FinalReportResponse(
-            session_id=session.id,
-            applicant_id=session.applicant_id,
-            professor_id=session.professor_id,
-            professor_name=professor.name,
-            initial_score=initial_matching["total_score"],
-            chat_score=chat_based["chat_score"],
-            final_score=final_score_data["final_score"],
-            report=report,
-            success=True
+        def generate_stream():
+            try:
+                for chunk in generate_final_report_stream(
+                    applicant_name=applicant.name or "지원자",
+                    applicant_data=applicant_data,
+                    professor_id=session.professor_id,
+                    professor_name=professor.name,
+                    initial_matching=initial_matching,
+                    chat_based_score=chat_based,
+                    final_score=final_score_data,
+                    chat_messages=chat_messages
+                ):
+                    yield chunk
+            except Exception as e:
+                # 오류 발생 시 오류 메시지 전송
+                error_msg = json.dumps({
+                    "content": f"오류가 발생했습니다: {str(e)}",
+                    "done": True,
+                    "error": True
+                }, ensure_ascii=False)
+                yield f"data: {error_msg}\n\n"
+        
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
         )
         
     except HTTPException:

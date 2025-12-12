@@ -969,6 +969,112 @@ def generate_final_report(
 지원자의 관심 키워드({applicant_data.get('interest_keyword', '')})와 학습 성향({', '.join(applicant_data.get('learning_styles', []))})을 고려할 때, {professor_name} 교수와의 협업 가능성이 높습니다."""
 
 
+def generate_final_report_stream(
+    applicant_name: str,
+    applicant_data: Dict,
+    professor_id: str,
+    professor_name: str,
+    initial_matching: Dict,
+    chat_based_score: Dict,
+    final_score: Dict,
+    chat_messages: List[Dict]
+) -> Generator[str, None, None]:
+    """
+    최종 매칭 리포트를 스트리밍으로 생성 (SSE용)
+    
+    Args:
+        applicant_name: 지원자 이름
+        applicant_data: 지원자 데이터
+        professor_id: 교수님 ID
+        professor_name: 교수님 이름
+        initial_matching: 1차 매칭 결과
+        chat_based_score: 채팅 기반 점수
+        final_score: 최종 점수
+        chat_messages: 채팅 메시지 리스트
+    
+    Yields:
+        리포트 텍스트 청크 (SSE 형식)
+    """
+    # 리포트 생성 프롬프트 (간소화)
+    report_prompt = f"""최종 매칭 리포트 작성:
+
+지원자: {applicant_name}
+관심: {applicant_data.get('interest_keyword', '')}
+학습 성향: {', '.join(applicant_data.get('learning_styles', []))}
+교수: {professor_name}
+
+1차 적합도: {initial_matching['total_score']}점
+- 연구 키워드: {initial_matching['breakdown']['A']}점
+- 연구 방법론: {initial_matching['breakdown']['B']}점
+- 커뮤니케이션: {initial_matching['breakdown']['C']}점
+- 학문 접근도: {initial_matching['breakdown']['D']}점
+- 교수 선호도: {initial_matching['breakdown']['E']}점
+
+채팅 분석: {chat_based_score.get('chat_score', 0)}점
+{chat_based_score.get('analysis', '채팅 내역 없음')}
+
+최종 적합도: {final_score['final_score']}점
+
+요구: 리포트 형식(제목, 요약, 상세 분석, 결론), 1차+채팅 종합 평가, 채팅 분석 포함, 강점/개선점, 추천 사항, 전문적 문체, 500-800자, 문단 사이 줄바꿈 필수.
+
+리포트:"""
+    
+    try:
+        # 스트리밍 응답 생성
+        stream = client.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "당신은 대학원 진학 상담 전문가입니다. 지원자와 교수님의 매칭을 종합적으로 분석하여 전문적인 리포트를 작성합니다. 각 문단 사이에는 반드시 줄바꿈(\\n)을 넣어 구조화된 형태로 작성하세요."
+                },
+                {
+                    "role": "user",
+                    "content": report_prompt
+                }
+            ],
+            temperature=0.5,
+            max_tokens=1200,
+            stream=True  # 스트리밍 활성화
+        )
+        
+        # 스트리밍 응답을 SSE 형식으로 변환
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                content = chunk.choices[0].delta.content
+                # 줄바꿈은 그대로 유지하고 전송
+                yield f"data: {json.dumps({'content': content, 'done': False}, ensure_ascii=False)}\n\n"
+        
+        # 완료 신호
+        yield f"data: {json.dumps({'content': '', 'done': True}, ensure_ascii=False)}\n\n"
+        
+    except Exception as e:
+        # 오류 발생 시 기본 리포트 템플릿 반환
+        default_report = f"""{applicant_name} 학생과 {professor_name} 교수 매칭 리포트
+
+요약
+{applicant_name} 학생과 {professor_name} 교수의 최종 적합도는 {final_score['final_score']}점입니다.
+
+1차 적합도 분석
+전체 적합도: {initial_matching['total_score']}점
+연구 키워드: {initial_matching['breakdown']['A']}점
+연구 방법론: {initial_matching['breakdown']['B']}점
+커뮤니케이션: {initial_matching['breakdown']['C']}점
+학문 접근도: {initial_matching['breakdown']['D']}점
+교수 선호도: {initial_matching['breakdown']['E']}점
+
+채팅 기반 분석
+채팅 적합도: {chat_based_score.get('chat_score', 0)}점
+채팅 분석: {chat_based_score.get('analysis', '채팅 내역이 없습니다.')}
+
+최종 평가
+1차 적합도와 채팅 기반 분석을 종합한 결과, 최종 적합도는 {final_score['final_score']}점입니다.
+
+추천 사항
+지원자의 관심 키워드({applicant_data.get('interest_keyword', '')})와 학습 성향({', '.join(applicant_data.get('learning_styles', []))})을 고려할 때, {professor_name} 교수와의 협업 가능성이 높습니다."""
+        yield f"data: {json.dumps({'content': default_report, 'done': True}, ensure_ascii=False)}\n\n"
+
+
 # -----------------------------
 # 11. 이메일 초안 생성
 # -----------------------------
