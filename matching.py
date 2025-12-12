@@ -844,8 +844,16 @@ def calculate_final_matching_score(
     # 가중치: 1차 적합도 60%, 채팅 기반 40%
     weighted_score = int(initial_score * 0.6 + chat_score * 0.4)
     
+    # 채팅이 안 좋은 게 아니면 (채팅 점수가 1차 점수보다 낮지 않거나, 75점 이상이면) 최소 2점 이상 올리기
+    if chat_score >= initial_score or chat_score >= 75:
+        # 최소 2점 이상 올리되, 98을 넘지 않도록
+        final_score = min(98, max(weighted_score, initial_score + 2))
+    else:
+        # 채팅이 좋지 않으면 가중 평균 사용
+        final_score = weighted_score
+    
     # 최종 점수는 70-98 범위로 제한
-    final_score = min(98, max(70, weighted_score))
+    final_score = min(98, max(70, final_score))
     
     return {
         "final_score": final_score,
