@@ -1142,3 +1142,119 @@ Advisor.AI 분석 결과:
 (첨부: Advisor.AI 최종 리포트)"""
         return email_template
 
+
+def generate_email_draft_stream(
+    applicant_name: str,
+    applicant_major: Optional[str],
+    applicant_interest_keyword: str,
+    graduate_school_name: str,
+    professor_name: str,
+    professor_research_fields: Optional[str],
+    final_score: Optional[int] = None,
+    appointment_date: str = "",
+    appointment_time: str = "",
+    consultation_method: str = "대면"
+) -> Generator[str, None, None]:
+    """
+    상담 요청 이메일 초안을 스트리밍으로 생성 (SSE용)
+    
+    Args:
+        applicant_name: 지원자 이름
+        applicant_major: 지원자 전공
+        applicant_interest_keyword: 지원자 관심 키워드
+        graduate_school_name: 대학원 이름
+        professor_name: 교수님 이름
+        professor_research_fields: 교수님 연구 분야
+        final_score: 최종 적합도 점수 (선택사항)
+        appointment_date: 상담 희망 날짜
+        appointment_time: 상담 희망 시간
+        consultation_method: 상담 방식
+    
+    Yields:
+        이메일 초안 텍스트 청크 (SSE 형식)
+    """
+    # 상담 방식에 따른 문구
+    consultation_text = {
+        "대면": "대면 상담",
+        "zoom": "Zoom 화상 상담",
+        "전화": "전화 상담"
+    }.get(consultation_method, "상담")
+    
+    # 이메일 초안 생성 프롬프트 (간소화)
+    score_text = f"{final_score}%의 높은 적합도" if final_score else "높은 적합도"
+    
+    email_prompt = f"""교수님께 보내는 상담 요청 이메일을 작성하세요.
+
+정보:
+- 지원자: {applicant_name} ({applicant_major or "전공 미입력"})
+- 관심 키워드: {applicant_interest_keyword}
+- 대학원: {graduate_school_name}
+- 교수님: {professor_name} 교수님 (연구 분야: {professor_research_fields or "미입력"})
+- 적합도: {score_text if final_score else "높음"}
+- 상담 희망: {appointment_date} {appointment_time}, {consultation_text}
+
+요구사항:
+- 정중하고 격식 있는 문체
+- 이메일 형식 (인사말, 본문, 마무리, 서명)
+- 적합도 언급, 관심 키워드와 연구 분야 일치도 강조
+- 상담 요청 이유 명확히, 날짜/시간 제안 (유연성 표현)
+- 리포트 첨부 언급
+- 마크다운 사용 금지, 순수 텍스트만
+- 500-800자, 간결하게
+
+이메일 초안:"""
+    
+    try:
+        # 스트리밍 응답 생성
+        stream = client.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "당신은 대학원 진학 상담 이메일 작성 전문가입니다. 정중하고 격식 있는 문체로 상담 요청 이메일을 작성합니다. 마크다운 문법(**, *, #, ` 등)을 절대 사용하지 않고 순수한 텍스트만 사용하세요."
+                },
+                {
+                    "role": "user",
+                    "content": email_prompt
+                }
+            ],
+            temperature=0.3,
+            max_tokens=1000,
+            stream=True  # 스트리밍 활성화
+        )
+        
+        # 스트리밍 응답을 SSE 형식으로 변환
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                content = chunk.choices[0].delta.content
+                # 마크다운 제거 (각 청크마다)
+                content = remove_markdown(content)
+                yield f"data: {json.dumps({'content': content, 'done': False}, ensure_ascii=False)}\n\n"
+        
+        # 완료 신호
+        yield f"data: {json.dumps({'content': '', 'done': True}, ensure_ascii=False)}\n\n"
+        
+    except Exception as e:
+        # 오류 발생 시 기본 이메일 템플릿 반환
+        score_text = f"{final_score}%의 높은 적합도" if final_score else "높은 적합도"
+        email_template = f"""{professor_name} 교수님께,
+
+안녕하십니까, 저는 {graduate_school_name} 진학을 희망하는 {applicant_name}입니다.
+
+이렇게 이메일을 드리는 이유는, 제가 진행한 Advisor.AI 분석 결과에서 교수님의 주요 연구 분야와 저의 관심 분야가 {score_text}를 보였기 때문입니다.
+
+저는 특히 '{applicant_interest_keyword}'을 주요 키워드로 하여 졸업 후 연구 계획을 구상하고 있으며, 이 키워드가 교수님의 전문 연구 분야와 밀접하게 맞닿아 있음을 확인했습니다.
+
+바쁘시겠지만, 제가 준비한 초안 연구 계획에 대해 교수님의 귀한 고견을 여쭙고자 잠시 {consultation_text}을 요청드립니다.
+
+저의 배경과 관심사를 자세히 담은 Advisor.AI 최종 리포트를 첨부하오니 참고해 주시면 감사하겠습니다.
+
+혹시 {appointment_date} {appointment_time}경에 잠시 시간을 내어주실 수 있으신지 조심스럽게 문의드립니다. 만약 해당 일정이 어려우시다면, 교수님께서 편하신 시간을 알려주시면 제가 그 일정에 맞추어 방문 드리도록 하겠습니다.
+
+바쁘신 와중에 귀한 시간을 내어 읽어주셔서 진심으로 감사드립니다.
+
+{applicant_name} 올림
+
+(첨부: Advisor.AI 최종 리포트)"""
+        yield f"data: {json.dumps({'content': email_template, 'done': True}, ensure_ascii=False)}\n\n"
+

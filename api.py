@@ -1183,10 +1183,18 @@ async def generate_final_matching_report(
 
 @app.post(
     "/email/draft",
-    response_model=EmailDraftResponse,
     tags=["Email"],
-    summary="상담 요청 이메일 초안 생성",
-    description="교수님께 보낼 상담 요청 이메일의 초안을 자동으로 생성합니다."
+    summary="상담 요청 이메일 초안 생성 (SSE 스트리밍)",
+    description="""
+    교수님께 보낼 상담 요청 이메일의 초안을 SSE(Server-Sent Events)로 스트리밍하여 생성합니다.
+    
+    **응답 형식 (SSE):**
+    ```
+    data: {"content": "텍스트 청크", "done": false}
+    data: {"content": "텍스트 청크", "done": false}
+    data: {"content": "", "done": true}
+    ```
+    """
 )
 async def create_email_draft(
     request: EmailDraftRequest,
@@ -1285,23 +1293,41 @@ async def create_email_draft(
                 # 세션 조회 실패해도 이메일 초안은 생성 가능
                 pass
         
-        # 이메일 초안 생성
-        email_draft = generate_email_draft(
-            applicant_name=applicant.name or "지원자",
-            applicant_major=applicant.major,
-            applicant_interest_keyword=applicant.interest_keyword,
-            graduate_school_name=graduate_school.name,
-            professor_name=professor.name,
-            professor_research_fields=professor.research_fields,
-            final_score=final_score,
-            appointment_date=request.appointment_date,
-            appointment_time=request.appointment_time,
-            consultation_method=request.consultation_method
-        )
+        # 이메일 초안 스트리밍 생성
+        from matching import generate_email_draft_stream
         
-        return EmailDraftResponse(
-            email_draft=email_draft,
-            success=True
+        def generate_stream():
+            try:
+                for chunk in generate_email_draft_stream(
+                    applicant_name=applicant.name or "지원자",
+                    applicant_major=applicant.major,
+                    applicant_interest_keyword=applicant.interest_keyword,
+                    graduate_school_name=graduate_school.name,
+                    professor_name=professor.name,
+                    professor_research_fields=professor.research_fields,
+                    final_score=final_score,
+                    appointment_date=request.appointment_date,
+                    appointment_time=request.appointment_time,
+                    consultation_method=request.consultation_method
+                ):
+                    yield chunk
+            except Exception as e:
+                # 오류 발생 시 오류 메시지 전송
+                error_msg = json.dumps({
+                    "content": f"오류가 발생했습니다: {str(e)}",
+                    "done": True,
+                    "error": True
+                }, ensure_ascii=False)
+                yield f"data: {error_msg}\n\n"
+        
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
         )
         
     except HTTPException:
