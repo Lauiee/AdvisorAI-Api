@@ -985,7 +985,8 @@ def generate_final_report_stream(
     initial_matching: Dict,
     chat_based_score: Dict,
     final_score: Dict,
-    chat_messages: List[Dict]
+    chat_messages: List[Dict],
+    include_metadata: bool = True
 ) -> Generator[str, None, None]:
     """
     최종 매칭 리포트를 스트리밍으로 생성 (SSE용)
@@ -1028,6 +1029,18 @@ def generate_final_report_stream(
 리포트:"""
     
     try:
+        # 메타데이터를 먼저 전송 (리포트 시작 전)
+        if include_metadata:
+            metadata = {
+                "type": "metadata",
+                "initial_score": initial_matching['total_score'],
+                "chat_score": chat_based_score.get('chat_score', 0),
+                "final_score": final_score['final_score'],
+                "professor_name": professor_name,
+                "done": False
+            }
+            yield f"data: {json.dumps(metadata, ensure_ascii=False)}\n\n"
+        
         # 스트리밍 응답 생성
         stream = client.chat.completions.create(
             model=CHAT_MODEL,
@@ -1050,11 +1063,22 @@ def generate_final_report_stream(
         for chunk in stream:
             if chunk.choices[0].delta.content is not None:
                 content = chunk.choices[0].delta.content
-                # 줄바꿈은 그대로 유지하고 전송
-                yield f"data: {json.dumps({'content': content, 'done': False}, ensure_ascii=False)}\n\n"
+                # 리포트 텍스트 청크 전송
+                yield f"data: {json.dumps({'type': 'content', 'content': content, 'done': False}, ensure_ascii=False)}\n\n"
         
-        # 완료 신호
-        yield f"data: {json.dumps({'content': '', 'done': True}, ensure_ascii=False)}\n\n"
+        # 완료 신호 (메타데이터 포함)
+        completion_data = {
+            "type": "done",
+            "content": "",
+            "done": True
+        }
+        if include_metadata:
+            completion_data.update({
+                "initial_score": initial_matching['total_score'],
+                "chat_score": chat_based_score.get('chat_score', 0),
+                "final_score": final_score['final_score']
+            })
+        yield f"data: {json.dumps(completion_data, ensure_ascii=False)}\n\n"
         
     except Exception as e:
         # 오류 발생 시 기본 리포트 템플릿 반환
